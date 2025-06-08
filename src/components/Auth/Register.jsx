@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, getDoc, updateDoc, deleteDoc, collection, query, where, getDocs, addDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, deleteDoc, collection, query, where, getDocs, addDoc, writeBatch } from 'firebase/firestore';
 import { auth, db } from '../../firebase';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Bike, Mail, Lock, User, AlertCircle, Crown, Shield } from 'lucide-react';
+import RideOnLogo from '../RideOnLogo';
 
 const Register = () => {
   const [searchParams] = useSearchParams();
@@ -34,6 +35,7 @@ const Register = () => {
     }
   };
 
+  // Updated username checking function using usernames collection
   const checkUserNameAvailability = async (userName) => {
     if (!userName || userName.length < 3) {
       setUserNameAvailable(null);
@@ -42,15 +44,33 @@ const Register = () => {
 
     setCheckingUserName(true);
     try {
-      const q = query(
-        collection(db, 'users'),
-        where('userName', '==', userName)
-      );
-      const querySnapshot = await getDocs(q);
-      setUserNameAvailable(querySnapshot.empty);
+      if (import.meta.env.DEV) {
+        console.log('Checking username availability for:', userName);
+        console.log('Checking document path:', `usernames/${userName.toLowerCase()}`);
+      }
+        // Check if username document exists in usernames collection
+        const usernameDoc = await getDoc(doc(db, 'usernames', userName.toLowerCase()));
+      
+      if (import.meta.env.DEV) {
+        console.log('Username document exists:', usernameDoc.exists());
+        console.log('Username available:', !usernameDoc.exists());
+      }
+      setUserNameAvailable(!usernameDoc.exists());
+      
+      if (usernameDoc.exists()) {
+        if(import.meta.DEV) {
+          console.log('Username taken by user:', usernameDoc.data()?.userId);
+        }
+      }
     } catch (error) {
-      console.error('Error checking username:', error);
-      setUserNameAvailable(null);
+        if(import.meta.DEV) {
+          console.error('Error checking username:', error);
+          console.error('Error code:', error.code);
+          console.error('Error message:', error.message);
+        }
+      
+      // For now, assume available if we can't check (prevents blocking registration)
+      setUserNameAvailable(true);
     }
     setCheckingUserName(false);
   };
@@ -97,8 +117,10 @@ const Register = () => {
       setError('');
       return true;
     } catch (error) {
-      console.error('Error checking email invitation:', error);
-      setError('Error validating invitation. Please try again.');
+        if (import.meta.DEV) {
+          console.error('Error checking email invitation:', error);
+          setError('Error validating invitation. Please try again.');
+        }
       return false;
     }
   };
@@ -186,24 +208,12 @@ const Register = () => {
         return;
       }
 
-      // Final username availability check
-      await checkUserNameAvailability(formData.userName.trim());
-      if (userNameAvailable === false) {
+      // Final username availability check using usernames collection
+      const usernameDoc = await getDoc(doc(db, 'usernames', formData.userName.trim().toLowerCase()));
+      if (usernameDoc.exists()) {
         setError('This username is already taken. Please choose another.');
         setLoading(false);
         return;
-      }
-
-      // Get team information (if not a team admin invite)
-      let teamData = null;
-      if (inviteData.teamId) {
-        const teamDoc = await getDoc(doc(db, 'teams', inviteData.teamId));
-        if (!teamDoc.exists()) {
-          setError('The team for this invitation no longer exists. Please contact support.');
-          setLoading(false);
-          return;
-        }
-        teamData = teamDoc.data();
       }
 
       // Create Firebase Auth user
@@ -215,9 +225,13 @@ const Register = () => {
       
       const user = userCredential.user;
 
-      // Handle app admin registration
+      // Prepare user data and team data based on invitation type
+      let userData;
+      let teamRef;
+      let updateTeamRequired = false;
+
       if (inviteData.isAppAdminInvite || inviteData.role === 'admin') {
-        // Create initial team for the app admin (they need a team too)
+        // Create initial team for the app admin
         const newTeamData = {
           name: "System Administrators",
           description: "Application administrators team",
@@ -234,10 +248,9 @@ const Register = () => {
           lastUpdated: new Date().toISOString()
         };
 
-        const teamRef = await addDoc(collection(db, 'teams'), newTeamData);
+        teamRef = await addDoc(collection(db, 'teams'), newTeamData);
 
-        // Create user profile as app admin
-        await setDoc(doc(db, 'users', user.uid), {
+        userData = {
           userId: user.uid,
           userName: formData.userName.trim(),
           email: formData.email,
@@ -247,7 +260,8 @@ const Register = () => {
           createdAt: new Date().toISOString(),
           totalMiles: 0,
           joinedTeamAt: new Date().toISOString()
-        });
+        };
+
       } else if (inviteData.isTeamAdminInvite || inviteData.role === 'team_admin') {
         // Create initial team for the team admin
         const newTeamData = {
@@ -266,10 +280,9 @@ const Register = () => {
           lastUpdated: new Date().toISOString()
         };
 
-        const teamRef = await addDoc(collection(db, 'teams'), newTeamData);
+        teamRef = await addDoc(collection(db, 'teams'), newTeamData);
 
-        // Create user profile as team admin
-        await setDoc(doc(db, 'users', user.uid), {
+        userData = {
           userId: user.uid,
           userName: formData.userName.trim(),
           email: formData.email,
@@ -279,17 +292,20 @@ const Register = () => {
           createdAt: new Date().toISOString(),
           totalMiles: 0,
           joinedTeamAt: new Date().toISOString()
-        });
+        };
+
       } else {
         // Regular team member registration
-        if (!teamData) {
-          setError('Team information not found. Please contact support.');
+        const teamDoc = await getDoc(doc(db, 'teams', inviteData.teamId));
+        if (!teamDoc.exists()) {
+          setError('The team for this invitation no longer exists. Please contact support.');
           setLoading(false);
           return;
         }
+        
+        const teamData = teamDoc.data();
 
-        // Create user profile document
-        await setDoc(doc(db, 'users', user.uid), {
+        userData = {
           userId: user.uid,
           userName: formData.userName.trim(),
           email: formData.email,
@@ -299,15 +315,45 @@ const Register = () => {
           createdAt: new Date().toISOString(),
           totalMiles: 0,
           joinedTeamAt: new Date().toISOString()
-        });
+        };
 
-        // Update team member list
+        // Mark that we need to update the team
+        updateTeamRequired = true;
+      }
+
+      // ATOMIC OPERATION: Create user profile and username reservation together
+      const batch = writeBatch(db);
+
+      // Add user profile to batch
+      const userRef = doc(db, 'users', user.uid);
+      batch.set(userRef, userData);
+
+      // Add username reservation to batch
+      const usernameRef = doc(db, 'usernames', formData.userName.trim().toLowerCase());
+      batch.set(usernameRef, {
+        userId: user.uid,
+        createdAt: new Date().toISOString()
+      });
+
+      // If this is a regular team member, add team update to batch
+      if (updateTeamRequired) {
+        const teamDoc = await getDoc(doc(db, 'teams', inviteData.teamId));
+        const teamData = teamDoc.data();
         const updatedMemberIds = [...teamData.memberIds, user.uid];
-        await updateDoc(doc(db, 'teams', inviteData.teamId), {
+        
+        const teamRef = doc(db, 'teams', inviteData.teamId);
+        batch.update(teamRef, {
           memberIds: updatedMemberIds,
           memberCount: updatedMemberIds.length,
           lastUpdated: new Date().toISOString()
         });
+      }
+
+      // Commit all operations atomically
+      await batch.commit();
+
+      if (import.meta.DEV) {
+        console.log('User profile and username created successfully!');
       }
 
       // Mark invitation as used
@@ -319,9 +365,11 @@ const Register = () => {
       // Navigate to dashboard
       navigate('/dashboard');
     } catch (error) {
-      console.error('Registration error:', error);
-      console.error('Error code:', error.code);
-      console.error('Error message:', error.message);
+      if (import.meta.DEV) {
+        console.error('Registration error:', error);
+        console.error('Error code:', error.code);
+        console.error('Error message:', error.message);
+      }
       
       if (error.code === 'auth/email-already-in-use') {
         setError('An account with this email already exists.');
@@ -393,17 +441,7 @@ const Register = () => {
         border: '1px solid #005479'
       }}>
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'center', 
-            marginBottom: '16px' 
-          }}>
-            <Bike style={{ 
-              height: '48px', 
-              width: '48px', 
-              color: '#ffc020' 
-            }} />
-          </div>
+          <RideOnLogo size={48} style={{ marginBottom: '16px' }} />
           <h1 style={{ 
             fontSize: '28px', 
             fontWeight: 'bold', 

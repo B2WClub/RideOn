@@ -12,7 +12,8 @@ import {
   updateDoc,
   arrayRemove,
   increment,
-  orderBy 
+  orderBy,
+  limit
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
@@ -35,6 +36,8 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import TeamsList from './TeamsList';
+
+const DEV = import.meta.env.MODE === 'development';
 
 function AdminPanel() {
   const { currentUser } = useAuth();
@@ -80,6 +83,10 @@ function AdminPanel() {
       }
       
       const userData = userDoc.data();
+      if (!userData || !userData.role) {
+        setError('Invalid user data: missing role');
+        return
+      }
       setUserProfile(userData);
 
       // Check if user is app admin
@@ -89,20 +96,20 @@ function AdminPanel() {
       }
 
       // Load admin data
-      await loadAdminData();
+      await loadAdminData(userData);
 
     } catch (error) {
-      console.error('Error checking admin access:', error);
+      if (DEV) console.error('Error checking admin access:', error);
       setError('Failed to load admin panel');
     }
     
     setLoading(false);
   };
 
-  const loadAdminData = async () => {
+  const loadAdminData = async (userData) => {
     try {
       // Load all teams
-      const teamsQuery = query(collection(db, 'teams'));
+      const teamsQuery = query(collection(db, 'teams'), limit(100));
       const teamsSnapshot = await getDocs(teamsQuery);
       const teams = [];
       teamsSnapshot.forEach((doc) => {
@@ -111,20 +118,35 @@ function AdminPanel() {
       setAllTeams(teams);
 
       // Load all users
-      const usersQuery = query(collection(db, 'users'));
+      const usersQuery = query(collection(db, 'users'), limit(100));
       const usersSnapshot = await getDocs(usersQuery);
       const users = [];
       usersSnapshot.forEach((doc) => {
-        users.push({ id: doc.id, ...doc.data() });
+        const data = doc.data();
+        if(data && data.role) {
+          users.push({ id: doc.id, ...doc.data() });
+        } else {
+          if (DEV) console.warn(`[WARN] Skipped user doc with ID ${doc.id} due to null data.`);
+        }
+        
       });
       setAllUsers(users);
 
       // Load pending admin invitations (both team_admin and admin)
+      if(DEV) {
+        console.log('LOAD PENDING ADMIN DATA');
+        console.log('[DEBUG] currentUser.uid:', currentUser.uid);
+        console.log('[DEBUG] userData.role:', userData.role);
+        console.log('[DEBUG] Attempting query on /invitations');
+      }
+
       const adminInvitesQuery = query(
         collection(db, 'invitations'),
         where('role', 'in', ['team_admin', 'admin']),
-        where('used', '==', false)
+        where('used', '==', false),
+        limit(100)
       );
+
       const adminInvitesSnapshot = await getDocs(adminInvitesQuery);
       const adminInvites = [];
       adminInvitesSnapshot.forEach((doc) => {
@@ -152,7 +174,7 @@ function AdminPanel() {
       });
 
     } catch (error) {
-      console.error('Error loading admin data:', error);
+      if (DEV) console.error('Error loading admin data:', error);
       setError('Failed to load admin data');
     }
   };

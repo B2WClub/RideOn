@@ -6,6 +6,7 @@ import MileLogger from './MileLogger';
 import MileHistory from './MileHistory';
 import TeamsList from './TeamsList';
 import AdminPanel from './AdminPanel';
+import RideOnLogo from './RideOnLogo';
 
 function OverviewTab({ currentUser, userProfile }) {
   const [stats, setStats] = useState({ 
@@ -384,7 +385,7 @@ function Dashboard() {
     }}>
       <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
         
-        {/* Header - Dark theme */}
+        {/* Header - Dark theme with new logo */}
         <div style={{ 
           background: '#033c59', 
           padding: '24px 32px', 
@@ -396,19 +397,18 @@ function Dashboard() {
           boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
           border: '1px solid #005479'
         }}>
-          <div>
-            <h1 style={{ 
-              margin: '0 0 4px 0', 
-              fontSize: '28px', 
-              fontWeight: '600', 
-              color: '#ffc020'
-            }}>RideOn Dashboard</h1>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+            <RideOnLogo size={48} />
             <p style={{ 
               margin: 0, 
               color: '#b4bdc2', 
-              fontSize: '15px' 
-            }}>Welcome back, {userProfile?.userName || currentUser?.email}</p>
+              fontSize: '16px',
+              textAlign: 'center'
+            }}>
+              Welcome back, {userProfile?.userName || currentUser?.email}
+            </p>
           </div>
+          
           <button 
             onClick={logout} 
             style={{

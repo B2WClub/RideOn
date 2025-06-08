@@ -11,10 +11,15 @@ import {
   where,
   getDocs,
   arrayRemove,
-  increment
+  increment,
+  limit
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Users, Mail, UserPlus, Settings, Trash2, Crown, AlertCircle, Check, X, Upload, Camera, Bike, Shield } from 'lucide-react';
+
+import { getAuth } from 'firebase/auth';
+
+const DEV = import.meta.env.MODE === 'development';
 
 function TeamsList({ appAdminMode = false, selectedTeam = null }) {
   const { currentUser } = useAuth();
@@ -53,6 +58,14 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
     try {
       setLoading(true);
       
+      ///////////////TROUBLESHOOTING////////////////////////////////////////////
+      const auth = getAuth()
+      const token = await auth.currentUser.getIdTokenResult(true);
+      if (import.meta.env.DEV) {
+        if(DEV) console.log('Decoded token claims (Admin MOde):', token.claims);
+      }
+      ////////////////////////////////////////////////////////////////////////
+
       // Get user profile
       const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
       if (!userDoc.exists()) {
@@ -88,11 +101,21 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
       setTeamMembers(members);
 
       // Get pending invitations
-      const invitationsQuery = query(
-        collection(db, 'invitations'),
-        where('teamId', '==', selectedTeam.id),
-        where('used', '==', false)
-      );
+      let invitationsQuery;
+        if (userData.role === 'admin') {
+          invitationsQuery = query(
+            collection(db, 'invitations'),
+            where('used', '==', false),
+            limit(100)
+          );
+        } else {
+          invitationsQuery = query(
+            collection(db, 'invitations'),
+            where('teamId', '==', userData.teamId),
+            where('used', '==', false),
+            limit(100)
+          );
+        }
       const invitationsSnapshot = await getDocs(invitationsQuery);
       const invitations = [];
       invitationsSnapshot.forEach((doc) => {
@@ -107,7 +130,7 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
       setPendingInvitations(invitations);
 
     } catch (error) {
-      console.error('Error fetching team data for admin:', error);
+      if (DEV) console.error('Error fetching team data for admin:', error);
       setError('Failed to load team data');
     }
     
@@ -118,7 +141,19 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
     try {
       setLoading(true);
       
+      ///////////////TROUBLESHOOTING////////////////////////////////////////////
+      const auth = getAuth()
+      const token = await auth.currentUser.getIdTokenResult(true);
+      if (import.meta.env.DEV) {
+        console.log('Decoded token claims:', token.claims);
+      }
+      ////////////////////////////////////////////////////////////////////////
+
       // Get user profile
+      if (import.meta.env.DEV) {
+        console.log('Fetching user profile for:', currentUser.uid);
+      }
+      
       const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
       if (!userDoc.exists()) {
         setError('User profile not found');
@@ -127,59 +162,125 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
       
       const userData = userDoc.data();
       setUserProfile(userData);
+      
+      if (import.meta.env.DEV) {
+        console.log('User data:', userData);
+        console.log('User role:', userData.role);
+        console.log('User teamId:', userData.teamId);
+      }
 
       // Check if user is team admin or app admin
       if (userData.role !== 'team_admin' && userData.role !== 'admin') {
+        if (import.meta.env.DEV) {
+          console.log('User role check failed. Role:', userData.role);
+        }
         setError('You do not have permission to manage teams');
         return;
+      }
+
+      if (import.meta.env.DEV) {
+        console.log('Attempting to fetch team with ID:', userData.teamId);
       }
 
       // Get team data
       const teamDoc = await getDoc(doc(db, 'teams', userData.teamId));
       if (!teamDoc.exists()) {
+        if (import.meta.env.DEV) {
+          console.log('Team document does not exist for ID:', userData.teamId);
+        }
         setError('Team not found');
         return;
       }
 
       const teamData = teamDoc.data();
+      if (import.meta.env.DEV) {
+        console.log('Team data fetched successfully:', teamData);
+      }
+      
       setTeam({ id: userData.teamId, ...teamData });
       setEditTeamName(teamData.name);
       setEditTeamDescription(teamData.description);
       setTeamImagePreview(teamData.teamImage || null);
 
       // Get team members
-      const membersQuery = query(
-        collection(db, 'users'),
-        where('teamId', '==', userData.teamId)
-      );
-      const membersSnapshot = await getDocs(membersQuery);
-      const members = [];
-      membersSnapshot.forEach((doc) => {
-        members.push({ id: doc.id, ...doc.data() });
-      });
-      setTeamMembers(members);
+      if (import.meta.env.DEV) {
+        console.log('Attempting to fetch team members for teamId:', userData.teamId);
+      }
+      
+      try {
+        const membersQuery = query(
+          collection(db, 'users'),
+          where('teamId', '==', userData.teamId)
+        );
+        const membersSnapshot = await getDocs(membersQuery);
+        const members = [];
+        membersSnapshot.forEach((doc) => {
+          members.push({ id: doc.id, ...doc.data() });
+        });
+        setTeamMembers(members);
+        
+        if (import.meta.env.DEV) {
+          console.log('Team members fetched successfully:', members.length, 'members');
+        }
+      } catch (memberError) {
+        if (import.meta.env.DEV) {
+          console.error('Error fetching team members:', memberError);
+        }
+        throw memberError; // Re-throw to trigger the main catch block
+      }
 
       // Get pending invitations
-      const invitationsQuery = query(
-        collection(db, 'invitations'),
-        where('teamId', '==', userData.teamId),
-        where('used', '==', false)
-      );
-      const invitationsSnapshot = await getDocs(invitationsQuery);
-      const invitations = [];
-      invitationsSnapshot.forEach((doc) => {
-        const data = doc.data();
-        // Check if invitation hasn't expired
-        const expiresAt = new Date(data.expiresAt);
-        const now = new Date();
-        if (now < expiresAt) {
-          invitations.push({ id: doc.id, ...data });
+      if (import.meta.env.DEV) {
+        console.log('Attempting to fetch pending invitations for teamId:', userData.teamId);
+      }
+      
+      try {
+        let invitationsQuery;
+          if (userData.role === 'admin') {
+            invitationsQuery = query(
+              collection(db, 'invitations'),
+              where('used', '==', false),
+              limit(100)
+            );
+          } else {
+            invitationsQuery = query(
+              collection(db, 'invitations'),
+              where('teamId', '==', userData.teamId),
+              where('used', '==', false),
+              limit(100)
+            );
+          }
+        if (DEV) console.log("GetDocs invitationQuery");
+        const invitationsSnapshot = await getDocs(invitationsQuery);
+        if (DEV) console.log("Docs found:", invitationsSnapshot.size);
+        const invitations = [];
+        invitationsSnapshot.forEach((doc) => {
+          const data = doc.data();
+          // Check if invitation hasn't expired
+          const expiresAt = new Date(data.expiresAt);
+          const now = new Date();
+          if (now < expiresAt) {
+            invitations.push({ id: doc.id, ...data });
+          }
+        });
+        setPendingInvitations(invitations);
+        
+        if (import.meta.env.DEV) {
+          console.log('Pending invitations fetched successfully:', invitations.length, 'invitations');
         }
-      });
-      setPendingInvitations(invitations);
+      } catch (inviteError) {
+        if (import.meta.env.DEV) {
+          console.error('Error fetching invitations:', inviteError);
+        }
+        throw inviteError; // Re-throw to trigger the main catch block
+      }
 
     } catch (error) {
-      console.error('Error fetching team data:', error);
+      if (import.meta.env.DEV) {
+        console.error('Error fetching team data:', error);
+        console.error('Error code:', error.code);
+        console.error('Error message:', error.message);
+      }
       setError('Failed to load team data');
     }
     
@@ -230,7 +331,7 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
       setTimeout(() => setSuccess(''), 3000);
 
     } catch (error) {
-      console.error('Error updating team:', error);
+      if (DEV) console.error('Error updating team:', error);
       setError('Failed to update team');
     }
 
@@ -302,7 +403,7 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
       }
 
     } catch (error) {
-      console.error('Error sending invitation:', error);
+      if (DEV) console.error('Error sending invitation:', error);
       setError('Failed to send invitation');
     }
 
@@ -344,7 +445,7 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
       }
 
     } catch (error) {
-      console.error('Error removing member:', error);
+      if (DEV) console.error('Error removing member:', error);
       setError('Failed to remove member');
     }
   };
@@ -387,7 +488,7 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
       }
 
     } catch (error) {
-      console.error('Error updating member role:', error);
+      if (DEV) console.error('Error updating member role:', error);
       setError('Failed to update member role');
     }
   };
@@ -403,7 +504,7 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
         fetchTeamData();
       }
     } catch (error) {
-      console.error('Error cancelling invitation:', error);
+      if (DEV) console.error('Error cancelling invitation:', error);
       setError('Failed to cancel invitation');
     }
   };
@@ -940,7 +1041,7 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
                             setSuccess('Link copied to clipboard!');
                             setTimeout(() => setSuccess(''), 2000);
                           } catch (error) {
-                            console.error('Failed to copy:', error);
+                            if (DEV) console.error('Failed to copy:', error);
                           }
                         }}
                         style={{

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, addDoc, doc, getDoc, updateDoc, increment } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -72,7 +72,7 @@ function MileLogger() {
         date: date,
         location: '', // Optional field for future use
         notes: notes,
-        createdAt: new Date()
+        createdAt: serverTimestamp()
       });
 
       // Update user's total miles
