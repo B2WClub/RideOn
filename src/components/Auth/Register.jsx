@@ -88,14 +88,15 @@ const Register = () => {
     }
 
     try {
-      const inviteDoc = await getDoc(doc(db, 'invitations', email));
-      if (!inviteDoc.exists()) {
-        setError('This email has not been invited to join a team. Please contact a team administrator.');
-        return false;
-      }
+    // First check the public view
+    const publicInviteDoc = await getDoc(doc(db, 'invitationsPublicView', email));
+    if (!publicInviteDoc.exists()) {
+      setError('This email has not been invited to join. Please contact an administrator.');
+      return false;
+    }
 
-      const inviteData = inviteDoc.data();
-      
+      const publicData = publicInviteDoc.data()
+    
       // Check if invitation has expired
       const now = new Date();
       const expiresAt = inviteData.expiresAt.toDate ? 
@@ -108,7 +109,7 @@ const Register = () => {
       }
 
       // Check if invitation has already been used
-      if (inviteData.used) {
+      if (publicData.used) {
         setError('This invitation has already been used.');
         return false;
       }
