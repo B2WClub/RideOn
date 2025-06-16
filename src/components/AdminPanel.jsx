@@ -15,7 +15,8 @@ import {
   orderBy,
   writeBatch,
   serverTimestamp,
-  limit
+  limit,
+  Timestamp
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
@@ -197,6 +198,9 @@ function AdminPanel() {
     setSuccess('');
 
     try {
+      // Normalize email to lowercase for document IDs
+      const normalizedEmail = inviteEmail.toLowerCase();
+
       // Check if email is already invited
       const existingInvite = await getDoc(doc(db, 'invitations', inviteEmail));
       if (existingInvite.exists()) {
@@ -221,7 +225,7 @@ function AdminPanel() {
       let targetTeamId = null;
       let targetTeamName = null;
 
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const expiresAt = Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
       // Create invitation
       const invitationData = {
         email: inviteEmail,
@@ -230,7 +234,7 @@ function AdminPanel() {
         teamName: targetTeamName,
         invitedBy: currentUser.uid,
         inviterUserName: userProfile.userName,
-        createdAt: new Date().toISOString(),
+        createdAt: serverTimestamp(),
         expiresAt: expiresAt,
         usedAt: null,
         used: false,
@@ -245,12 +249,24 @@ function AdminPanel() {
         used: false
       }
 
-      const batch = writeBatch(db)
-      batch.set(doc(db, 'invitations', inviteEmail), invitationData);
-      batch.set(doc(db, 'invitationsPublicView', inviteEmail), publicViewData);
-
-      //Commit the batch
-      await batch.commit();
+      try {
+        // Try creating invitation first
+        if (import.meta.env.DEV) console.log('Attempting to create invitation document...');
+        await setDoc(doc(db, 'invitations', normalizedEmail), invitationData);
+        if (import.meta.env.DEV) console.log('Invitation created successfully!');
+        
+        // Then try public view
+        if (import.meta.env.DEV) console.log('Attempting to create public view document...');
+        await setDoc(doc(db, 'invitationsPublicView', normalizedEmail), publicViewData);
+        if (import.meta.env.DEV) console.log('Public view created successfully!');
+      } catch (error) {
+        if (import.meta.env.DEV) console.error('Failed at:', error);
+        // If first one succeeds but second fails, clean up
+        if (error.message.includes('invitationsPublicView')) {
+          await deleteDoc(doc(db, 'invitations', normalizedEmail));
+        }
+        throw error;
+      }
 
       // Create invitation link
       const linkParam = inviteRole === 'admin' ? 'appadmin=true' : 'admin=true';
@@ -285,8 +301,8 @@ function AdminPanel() {
   const handleCancelAdminInvitation = async (email) => {
     try {
       const batch = writeBatch(db);
-      batch.delete(doc(db, 'invitations', email));
-      batch.delete(doc(db, 'invitationsPublicView', email));
+      batch.delete(doc(db, 'invitations', normalizedEmail));
+      batch.delete(doc(db, 'invitationsPublicView', normalizedEmail));
       await batch.commit();
       
       setSuccess('Admin invitation cancelled');

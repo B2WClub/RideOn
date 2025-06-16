@@ -12,7 +12,9 @@ import {
   getDocs,
   arrayRemove,
   increment,
-  limit
+  limit,
+  serverTimestamp,
+  Timestamp
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Users, Mail, UserPlus, Settings, Trash2, Crown, AlertCircle, Check, X, Upload, Camera, Bike, Shield } from 'lucide-react';
@@ -257,7 +259,17 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
         invitationsSnapshot.forEach((doc) => {
           const data = doc.data();
           // Check if invitation hasn't expired
-          const expiresAt = new Date(data.expiresAt);
+          let expiresAt;
+          if (data.expiresAt && data.expiresAt.toDate) {
+            // It's a Firestore Timestamp
+            expiresAt = data.expiresAt.toDate();
+          } else if (data.expiresAt && data.expiresAt.seconds) {
+            // It's a Firestore Timestamp in plain object form
+            expiresAt = new Date(data.expiresAt.seconds * 1000);
+          } else {
+            // Fallback for string dates
+            expiresAt = new Date(data.expiresAt);
+          }
           const now = new Date();
           if (now < expiresAt) {
             invitations.push({ id: doc.id, ...data });
@@ -345,13 +357,30 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
     setSuccess('');
 
     try {
+      const normalizedEmail = inviteEmail.toLowerCase();
+      if (import.meta.env.DEV) {
+      console.log('Creating invitation for:', inviteEmail);
+      console.log('Normalized email:', normalizedEmail);
+      console.log('Team ID:', team.id);
+      console.log('User role:', userProfile.role);
+    }
       // Check if email is already invited
-      const existingInvite = await getDoc(doc(db, 'invitations', inviteEmail));
+      try {
+      if (import.meta.env.DEV) console.log('Checking existing invite...');
+      const existingInvite = await getDoc(doc(db, 'invitations', normalizedEmail));
+      if (import.meta.env.DEV) console.log('Existing invite check passed');
+      
       if (existingInvite.exists()) {
         setError('This email has already been invited');
         setInviteLoading(false);
         return;
       }
+    } catch (checkError) {
+      if (import.meta.env.DEV) {
+        console.error('Error checking existing invite:', checkError);
+      }
+      // Continue anyway - the invite might not exist
+    }
 
       // Check if user already exists
       const existingUserQuery = query(
@@ -364,7 +393,7 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
         setInviteLoading(false);
         return;
       }
-
+      const expiresAt = Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
       const invitationData = {
         email: inviteEmail,
         role: inviteRole,
@@ -372,13 +401,38 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
         teamName: team.name,
         invitedBy: currentUser.uid,
         inviterUserName: userProfile.userName,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+        createdAt: serverTimestamp(),
+        expiresAt: expiresAt,
         used: false,
-        usedAt: null
+        usedAt: null,
+        isTeamAdminInvite: inviteRole === 'team_admin',
+        isAppAdminInvite: inviteRole === 'admin'
       };
+      //Create the public view document
+      const publicViewData = {
+        email: inviteEmail,
+        expiresAt: expiresAt,
+        used: false
+      }
 
-      await setDoc(doc(db, 'invitations', inviteEmail), invitationData);
+      try {
+          // Try creating invitation first
+          if (import.meta.env.DEV) console.log('Attempting to create invitation document...');
+          await setDoc(doc(db, 'invitations', normalizedEmail), invitationData);
+          if (import.meta.env.DEV) console.log('Invitation created successfully!');
+          
+          // Then try public view
+          if (import.meta.env.DEV) console.log('Attempting to create public view document...');
+          await setDoc(doc(db, 'invitationsPublicView', normalizedEmail), publicViewData);
+          if (import.meta.env.DEV) console.log('Public view created successfully!');
+        } catch (error) {
+          if (import.meta.env.DEV) console.error('Failed at:', error);
+          // If first one succeeds but second fails, clean up
+          if (error.message.includes('invitationsPublicView')) {
+            await deleteDoc(doc(db, 'invitations', normalizedEmail));
+          }
+          throw error;
+        }
 
       // Create invitation link
       const inviteLink = `${window.location.origin}/register?email=${encodeURIComponent(inviteEmail)}&team=${encodeURIComponent(team.name)}`;
@@ -403,7 +457,12 @@ function TeamsList({ appAdminMode = false, selectedTeam = null }) {
       }
 
     } catch (error) {
-      if (DEV) console.error('Error sending invitation:', error);
+      if (DEV) {
+        console.error('Error sending invitation:', error);
+        console.error('Error code:', error.code);
+        console.error('Error message:', error.message);
+        console.error('Invitation data:', invitationData);
+      };
       setError('Failed to send invitation');
     }
 

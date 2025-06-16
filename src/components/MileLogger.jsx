@@ -49,6 +49,19 @@ function MileLogger() {
 
     try {
       const milesFloat = parseFloat(miles);
+
+      const mileLogData = {
+        userId: currentUser.uid,
+        userName: userProfile.userName,
+        userEmail: currentUser.email,
+        teamId: userProfile.teamId,
+        teamName: userProfile.teamName,
+        miles: milesFloat,
+        date: date,
+        location: '', // Optional field for future use
+        notes: notes,
+        createdAt: serverTimestamp()
+      };
       
       console.log('Attempting to log miles...', {
         userId: currentUser.uid,
@@ -60,36 +73,89 @@ function MileLogger() {
         date: date,
         notes: notes
       });
+      if (import.meta.env.DEV) {
+            console.log('=== MILE LOGGING DEBUG ===');
+            console.log('Attempting to create mile log with data:', mileLogData);
+            console.log('Current user UID:', currentUser.uid);
+            console.log('User profile:', userProfile);
+      }
 
-      // Add mile log to collection
-      const docRef = await addDoc(collection(db, 'mileLogs'), {
-        userId: currentUser.uid,
-        userName: userProfile.userName,
-        userEmail: currentUser.email,
-        teamId: userProfile.teamId,
-        teamName: userProfile.teamName,
-        miles: milesFloat,
-        date: date,
-        location: '', // Optional field for future use
-        notes: notes,
-        createdAt: serverTimestamp()
-      });
+      let docRef;
+        try {
+          docRef = await addDoc(collection(db, 'mileLogs'), mileLogData);
+          if (import.meta.env.DEV) {
+            console.log('SUCCESS: Mile log created with ID:', docRef.id);
+          }
+        } catch (mileLogError) {
+          if (import.meta.env.DEV) {
+            console.error('Step 1 FAILED: Error creating mile log:', mileLogError);
+            console.error('Error code:', mileLogError.code);
+            console.error('Error message:', mileLogError.message);
+          }
+          throw mileLogError;
+        }
 
-      // Update user's total miles
-      await updateDoc(doc(db, 'users', currentUser.uid), {
-        totalMiles: increment(milesFloat)
-      });
+        if (import.meta.env.DEV) {
+          console.log('Attempting to update user total miles...');
+          console.log('User document path:', `users/${currentUser.uid}`);
+          console.log('Incrementing by:', milesFloat);
+        }
+
+      try {
+        await updateDoc(doc(db, 'users', currentUser.uid), {
+          totalMiles: increment(milesFloat)
+        });
+        if (import.meta.env.DEV) {
+          console.log('SUCCESS: User total miles updated');
+        }
+      } catch (userUpdateError) {
+        if (import.meta.env.DEV) {
+          console.error('FAILED: Error updating user miles:', userUpdateError);
+          console.error('Error code:', userUpdateError.code);
+        }
+        // Don't throw - continue to try team update
+      }
 
       // Update team's total miles and rides
       if (userProfile.teamId) {
-        await updateDoc(doc(db, 'teams', userProfile.teamId), {
-          totalMiles: increment(milesFloat),
-          totalRides: increment(1),
-          lastUpdated: new Date().toISOString()
-        });
+        if (import.meta.env.DEV) {
+          console.log('Attempting to update team stats...');
+          console.log('Team document path:', `teams/${userProfile.teamId}`);
+          console.log('Update data:', {
+            totalMiles: `increment(${milesFloat})`,
+            totalRides: 'increment(1)',
+            lastUpdated: 'serverTimestamp()'
+          });
+        }
+
+        try {
+          await updateDoc(doc(db, 'teams', userProfile.teamId), {
+            totalMiles: increment(milesFloat),
+            totalRides: increment(1),
+            lastUpdated: serverTimestamp()
+          });
+          if (import.meta.env.DEV) {
+            console.log('SUCCESS: Team stats updated');
+          }
+        } catch (teamUpdateError) {
+          if (import.meta.env.DEV) {
+            console.error('FAILED: Error updating team stats:', teamUpdateError);
+            console.error('Error code:', teamUpdateError.code);
+            console.error('Team ID:', userProfile.teamId);
+            console.error('User role:', userProfile.role);
+          }
+          // Don't throw - mile log was created successfully
+        }
+      } else {
+        if (import.meta.env.DEV) {
+          console.log('SKIPPED: User has no teamId');
+        }
       }
 
-      console.log('Miles logged successfully!', docRef.id);
+      if (import.meta.env.DEV) {
+        console.log('=== MILE LOGGING COMPLETE ===');
+        console.log('Miles logged successfully with ID:', docRef.id);
+      }
 
       // Reset form
       setMiles('');
