@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Login from './components/Auth/Login'
 import Register from './components/Auth/Register'
 import Dashboard from './components/Dashboard'
+import Leaderboard from './components/LeaderBoard';
 import './index.css'
 
 function AppContent() {

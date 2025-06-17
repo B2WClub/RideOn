@@ -7,6 +7,7 @@ import MileHistory from './MileHistory';
 import TeamsList from './TeamsList';
 import AdminPanel from './AdminPanel';
 import RideOnLogo from './RideOnLogo';
+import Leaderboard from './LeaderBoard'
 
 function OverviewTab({ currentUser, userProfile }) {
   const [stats, setStats] = useState({ 
@@ -493,7 +494,24 @@ function Dashboard() {
           >
             My Rides
           </button>
-          
+          <button 
+            onClick={() => setActiveTab('leaderboard')} 
+            style={buttonStyle(activeTab === 'leaderboard')}
+            onMouseEnter={(e) => {
+              if (activeTab !== 'leaderboard') {
+                e.target.style.backgroundColor = '#005479';
+                e.target.style.borderColor = '#f5a302';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (activeTab !== 'leaderboard') {
+                e.target.style.backgroundColor = '#033c59';
+                e.target.style.borderColor = '#005479';
+              }
+            }}
+          >
+            Leaderboard
+          </button>
           {/* Show Team Management tab only for team admins */}
           {(userProfile?.role === 'team_admin' || userProfile?.role === 'admin') && (
             <button 
@@ -546,6 +564,7 @@ function Dashboard() {
 
         {activeTab === 'log' && <MileLogger />}
         {activeTab === 'history' && <MileHistory />}
+        {activeTab === 'leaderboard' && <Leaderboard />}
         {activeTab === 'teams' && <TeamsList />}
         {activeTab === 'admin' && <AdminPanel />}
       </div>
