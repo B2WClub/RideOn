@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, addDoc, doc, getDoc, updateDoc, increment, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, updateDoc, increment, serverTimestamp, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -36,6 +36,22 @@ function MileLogger() {
     }
   }, [currentUser]);
 
+  // Helper function to get current week identifier
+  const getCurrentWeekId = () => {
+    const now = new Date();
+    const currentDay = now.getDay();
+    const daysFromMonday = currentDay === 0 ? 6 : currentDay - 1;
+    
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - daysFromMonday);
+    weekStart.setHours(0, 0, 0, 0);
+    
+    // Format as YYYY-W## (e.g., "2025-W03")
+    const year = weekStart.getFullYear();
+    const weekNumber = Math.ceil((weekStart - new Date(year, 0, 1)) / (7 * 24 * 60 * 60 * 1000));
+    return `${year}-W${weekNumber.toString().padStart(2, '0')}`;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -49,6 +65,7 @@ function MileLogger() {
 
     try {
       const milesFloat = parseFloat(miles);
+      const currentWeekId = getCurrentWeekId();
 
       const mileLogData = {
         userId: currentUser.uid,
@@ -78,6 +95,7 @@ function MileLogger() {
             console.log('Attempting to create mile log with data:', mileLogData);
             console.log('Current user UID:', currentUser.uid);
             console.log('User profile:', userProfile);
+            console.log('Current week ID:', currentWeekId);
       }
 
       let docRef;
@@ -96,21 +114,23 @@ function MileLogger() {
         }
 
         if (import.meta.env.DEV) {
-          console.log('Attempting to update user total miles...');
+          console.log('Attempting to update user total miles and rides...');
           console.log('User document path:', `users/${currentUser.uid}`);
-          console.log('Incrementing by:', milesFloat);
+          console.log('Incrementing miles by:', milesFloat);
+          console.log('Incrementing rides by: 1');
         }
 
       try {
         await updateDoc(doc(db, 'users', currentUser.uid), {
-          totalMiles: increment(milesFloat)
+          totalMiles: increment(milesFloat),
+          totalRides: increment(1) // NEW: Track user's total rides
         });
         if (import.meta.env.DEV) {
-          console.log('SUCCESS: User total miles updated');
+          console.log('SUCCESS: User total miles and rides updated');
         }
       } catch (userUpdateError) {
         if (import.meta.env.DEV) {
-          console.error('FAILED: Error updating user miles:', userUpdateError);
+          console.error('FAILED: Error updating user stats:', userUpdateError);
           console.error('Error code:', userUpdateError.code);
         }
         // Don't throw - continue to try team update
@@ -152,6 +172,65 @@ function MileLogger() {
         }
       }
 
+      // NEW: Update weekly stats for user
+      if (import.meta.env.DEV) {
+        console.log('Attempting to update user weekly stats...');
+        console.log('Weekly stats document path:', `weeklyStats/${currentUser.uid}-${currentWeekId}`);
+      }
+
+      try {
+        await setDoc(doc(db, 'weeklyStats', `${currentUser.uid}-${currentWeekId}`), {
+          userId: currentUser.uid,
+          userName: userProfile.userName,
+          teamId: userProfile.teamId,
+          teamName: userProfile.teamName,
+          weekId: currentWeekId,
+          weeklyMiles: increment(milesFloat),
+          weeklyRides: increment(1),
+          lastUpdated: serverTimestamp()
+        }, { merge: true });
+        
+        if (import.meta.env.DEV) {
+          console.log('SUCCESS: User weekly stats updated');
+        }
+      } catch (weeklyStatsError) {
+        if (import.meta.env.DEV) {
+          console.error('FAILED: Error updating user weekly stats:', weeklyStatsError);
+          console.error('Error code:', weeklyStatsError.code);
+        }
+        // Don't throw - this is supplementary data
+      }
+
+      // NEW: Update weekly stats for team
+      if (userProfile.teamId) {
+        if (import.meta.env.DEV) {
+          console.log('Attempting to update team weekly stats...');
+          console.log('Team weekly stats document path:', `weeklyTeamStats/${userProfile.teamId}-${currentWeekId}`);
+        }
+
+        try {
+          await setDoc(doc(db, 'weeklyTeamStats', `${userProfile.teamId}-${currentWeekId}`), {
+            teamId: userProfile.teamId,
+            teamName: userProfile.teamName,
+            weekId: currentWeekId,
+            weeklyMiles: increment(milesFloat),
+            weeklyRides: increment(1),
+            memberCount: userProfile.memberCount || 1, // Will need to be updated when team membership changes
+            lastUpdated: serverTimestamp()
+          }, { merge: true });
+          
+          if (import.meta.env.DEV) {
+            console.log('SUCCESS: Team weekly stats updated');
+          }
+        } catch (teamWeeklyStatsError) {
+          if (import.meta.env.DEV) {
+            console.error('FAILED: Error updating team weekly stats:', teamWeeklyStatsError);
+            console.error('Error code:', teamWeeklyStatsError.code);
+          }
+          // Don't throw - this is supplementary data
+        }
+      }
+
       if (import.meta.env.DEV) {
         console.log('=== MILE LOGGING COMPLETE ===');
         console.log('Miles logged successfully with ID:', docRef.id);
@@ -177,7 +256,7 @@ function MileLogger() {
         borderRadius: '16px',
         padding: '40px',
         boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
-        maxWidth: '600px',
+        maxWidth: '500px',
         margin: '0 auto',
         border: '1px solid #005479'
       }}>
@@ -185,46 +264,11 @@ function MileLogger() {
           fontSize: '28px', 
           fontWeight: '600', 
           color: '#ffc020', 
-          margin: '0 0 24px 0',
+          margin: '0 0 16px 0',
           textAlign: 'center'
         }}>Log Your Miles</h2>
-        <p style={{ textAlign: 'center', color: '#b4bdc2', fontSize: '16px' }}>Loading your profile...</p>
+        <p style={{ textAlign: 'center', color: '#b4bdc2', fontSize: '16px' }}>Loading...</p>
       </div>
-    );
-  }
-
-  if (!userProfile) {
-    return (
-      <div style={{
-        background: '#033c59',
-        borderRadius: '16px',
-        padding: '40px',
-        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
-        maxWidth: '600px',
-        margin: '0 auto',
-        border: '1px solid #005479'
-      }}>
-        <h2 style={{ 
-          fontSize: '28px', 
-          fontWeight: '600', 
-          color: '#ffc020', 
-          margin: '0 0 24px 0',
-          textAlign: 'center'
-        }}>Log Your Miles</h2>
-        <div style={{
-          background: '#0c1e34',
-          color: '#ffc020',
-          padding: '16px',
-          borderRadius: '12px',
-          fontSize: '14px',
-          fontWeight: '600',
-          textAlign: 'center',
-          border: '1px solid #005479'
-        }}>
-          Unable to load your profile. Please refresh the page or contact support.
-        </div>
-      </div>
-      
     );
   }
 
@@ -234,7 +278,7 @@ function MileLogger() {
       borderRadius: '16px',
       padding: '40px',
       boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
-      maxWidth: '600px',
+      maxWidth: '500px',
       margin: '0 auto',
       border: '1px solid #005479'
     }}>
@@ -242,113 +286,84 @@ function MileLogger() {
         fontSize: '28px', 
         fontWeight: '600', 
         color: '#ffc020', 
-        margin: '0 0 8px 0',
+        margin: '0 0 32px 0',
         textAlign: 'center'
       }}>Log Your Miles</h2>
       
       {/* Team Info */}
-      <div style={{
-        background: '#0c1e34',
-        padding: '16px',
-        borderRadius: '12px',
-        marginBottom: '24px',
-        textAlign: 'center',
-        border: '1px solid #005479'
-      }}>
-        <div style={{ 
-          fontSize: '14px', 
-          color: '#b4bdc2',
-          marginBottom: '4px'
-        }}>
-          Logging for team:
-        </div>
-        <div style={{ 
-          fontSize: '18px', 
-          fontWeight: '600', 
-          color: '#ffc020'
-        }}>
-          {userProfile.teamName}
-        </div>
-        <div style={{ 
-          fontSize: '12px', 
-          color: '#b4bdc2',
-          marginTop: '4px'
-        }}>
-          as {userProfile.userName}
-        </div>
-      </div>
-      
-      {success && (
+      {userProfile && (
         <div style={{
           background: '#0c1e34',
-          color: '#ffc020',
           padding: '16px',
           borderRadius: '12px',
           marginBottom: '24px',
-          fontSize: '14px',
-          fontWeight: '600',
           textAlign: 'center',
-          border: '1px solid #005479',
-          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+          border: '1px solid #005479'
         }}>
-          Miles logged successfully! 🚴‍♂️
+          <div style={{ 
+            fontSize: '16px', 
+            fontWeight: '600', 
+            color: '#ffc020',
+            marginBottom: '4px'
+          }}>
+            Riding for {userProfile.teamName}
+          </div>
+          <div style={{ 
+            fontSize: '14px', 
+            color: '#b4bdc2'
+          }}>
+            Logged as {userProfile.userName}
+          </div>
         </div>
       )}
 
       <form onSubmit={handleSubmit}>
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ 
-            display: 'block', 
-            marginBottom: '8px', 
+        <div style={{ marginBottom: '24px' }}>
+          <label style={{
+            display: 'block',
+            fontSize: '16px',
             fontWeight: '600',
             color: '#ffc020',
-            fontSize: '14px'
+            marginBottom: '8px'
           }}>
-            Miles Traveled *
+            Miles *
           </label>
           <input
             type="number"
             step="0.1"
             min="0"
+            max="1000"
             value={miles}
             onChange={(e) => setMiles(e.target.value)}
             required
-            placeholder="Enter miles (e.g., 5.2)"
             style={{
               width: '100%',
-              padding: '16px',
+              padding: '12px',
+              borderRadius: '8px',
               border: '2px solid #005479',
-              borderRadius: '12px',
-              fontSize: '16px',
               background: '#0c1e34',
-              color: '#b4bdc2',
-              transition: 'all 0.3s ease',
-              fontWeight: '500',
+              color: '#fff',
+              fontSize: '16px',
               outline: 'none',
-              height: '52px',
-              boxSizing: 'border-box',
-              appearance: 'textfield',
-              WebkitAppearance: 'textfield',
-              MozAppearance: 'textfield'
+              transition: 'border-color 0.3s ease'
             }}
             onFocus={(e) => {
-              e.target.style.borderColor = '#f5a302';
-              e.target.style.boxShadow = '0 0 0 3px rgba(245, 163, 2, 0.1)';
+              e.target.style.borderColor = '#ffc020';
             }}
             onBlur={(e) => {
               e.target.style.borderColor = '#005479';
-              e.target.style.boxShadow = 'none';
             }}
+            placeholder="Enter miles (e.g., 5.2)"
           />
         </div>
 
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ 
-            display: 'block', 
-            marginBottom: '8px', 
+        <div style={{ marginBottom: '24px' }}>
+          <label style={{
+            display: 'block',
+            fontSize: '16px',
             fontWeight: '600',
             color: '#ffc020',
-            fontSize: '14px'
+            marginBottom: '8px'
           }}>
             Date *
           </label>
@@ -359,97 +374,90 @@ function MileLogger() {
             required
             style={{
               width: '100%',
-              padding: '16px',
+              padding: '12px',
+              borderRadius: '8px',
               border: '2px solid #005479',
-              borderRadius: '12px',
-              fontSize: '16px',
               background: '#0c1e34',
-              color: '#b4bdc2',
-              transition: 'all 0.3s ease',
-              fontWeight: '500',
-              outline: 'none'
+              color: '#fff',
+              fontSize: '16px',
+              outline: 'none',
+              transition: 'border-color 0.3s ease'
             }}
             onFocus={(e) => {
-              e.target.style.borderColor = '#f5a302';
-              e.target.style.boxShadow = '0 0 0 3px rgba(245, 163, 2, 0.1)';
+              e.target.style.borderColor = '#ffc020';
             }}
             onBlur={(e) => {
               e.target.style.borderColor = '#005479';
-              e.target.style.boxShadow = 'none';
             }}
           />
         </div>
 
-        <div style={{ marginBottom: '24px' }}>
-          <label style={{ 
-            display: 'block', 
-            marginBottom: '8px', 
+        <div style={{ marginBottom: '32px' }}>
+          <label style={{
+            display: 'block',
+            fontSize: '16px',
             fontWeight: '600',
             color: '#ffc020',
-            fontSize: '14px'
+            marginBottom: '8px'
           }}>
             Notes (Optional)
           </label>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Where did you ride? How was the trip?"
-            rows="4"
+            rows="3"
             style={{
               width: '100%',
-              padding: '16px',
+              padding: '12px',
+              borderRadius: '8px',
               border: '2px solid #005479',
-              borderRadius: '12px',
-              fontSize: '16px',
-              resize: 'vertical',
               background: '#0c1e34',
-              color: '#b4bdc2',
-              transition: 'all 0.3s ease',
-              fontWeight: '500',
-              fontFamily: 'inherit',
-              outline: 'none'
+              color: '#fff',
+              fontSize: '16px',
+              outline: 'none',
+              transition: 'border-color 0.3s ease',
+              resize: 'vertical',
+              fontFamily: 'inherit'
             }}
             onFocus={(e) => {
-              e.target.style.borderColor = '#f5a302';
-              e.target.style.boxShadow = '0 0 0 3px rgba(245, 163, 2, 0.1)';
+              e.target.style.borderColor = '#ffc020';
             }}
             onBlur={(e) => {
               e.target.style.borderColor = '#005479';
-              e.target.style.boxShadow = 'none';
             }}
+            placeholder="Route details, weather, or other notes..."
           />
         </div>
 
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || !miles}
           style={{
             width: '100%',
-            background: loading 
+            padding: '14px',
+            background: loading || !miles 
               ? '#005479' 
-              : 'linear-gradient(135deg, #f5a302, #ffc020)',
-            color: loading ? '#b4bdc2' : '#0c1e34',
-            padding: '16px',
+              : 'linear-gradient(135deg, #f5a302, #ffba41)',
+            color: loading || !miles ? '#b4bdc2' : '#0c1e34',
             border: 'none',
             borderRadius: '12px',
-            fontSize: '16px',
+            fontSize: '18px',
             fontWeight: '700',
-            cursor: loading ? 'not-allowed' : 'pointer',
+            cursor: loading || !miles ? 'not-allowed' : 'pointer',
             transition: 'all 0.3s ease',
-            boxShadow: loading 
+            boxShadow: loading || !miles 
               ? 'none' 
               : '0 4px 12px rgba(245, 163, 2, 0.3)',
-            transform: loading ? 'none' : 'translateY(0)',
             outline: 'none'
           }}
           onMouseEnter={(e) => {
-            if (!loading) {
+            if (!loading && miles) {
               e.target.style.transform = 'translateY(-2px)';
               e.target.style.boxShadow = '0 6px 20px rgba(245, 163, 2, 0.4)';
             }
           }}
           onMouseLeave={(e) => {
-            if (!loading) {
+            if (!loading && miles) {
               e.target.style.transform = 'translateY(0)';
               e.target.style.boxShadow = '0 4px 12px rgba(245, 163, 2, 0.3)';
             }
@@ -457,6 +465,22 @@ function MileLogger() {
         >
           {loading ? 'Logging Miles...' : 'Log Miles'}
         </button>
+
+        {success && (
+          <div style={{
+            marginTop: '16px',
+            padding: '12px',
+            background: '#0a4f3c',
+            border: '1px solid #16a085',
+            borderRadius: '8px',
+            color: '#16a085',
+            textAlign: 'center',
+            fontSize: '14px',
+            fontWeight: '600'
+          }}>
+            ✅ Miles logged successfully!
+          </div>
+        )}
       </form>
     </div>
   );

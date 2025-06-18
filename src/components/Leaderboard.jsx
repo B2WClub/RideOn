@@ -17,6 +17,117 @@ function Leaderboard() {
     fetchLeaderboardData();
   }, [sortBy]);
 
+  // Helper function to get current week boundaries (Monday - Sunday)
+  const getCurrentWeekBounds = () => {
+    const now = new Date();
+    const currentDay = now.getDay();
+    const daysFromMonday = currentDay === 0 ? 6 : currentDay - 1;
+    
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - daysFromMonday);
+    weekStart.setHours(0, 0, 0, 0);
+    
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
+    
+    return { weekStart, weekEnd };
+  };
+
+  // Helper function to get current week identifier
+  const getCurrentWeekId = () => {
+    const now = new Date();
+    const currentDay = now.getDay();
+    const daysFromMonday = currentDay === 0 ? 6 : currentDay - 1;
+    
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - daysFromMonday);
+    weekStart.setHours(0, 0, 0, 0);
+    
+    // Format as YYYY-W## (e.g., "2025-W03")
+    const year = weekStart.getFullYear();
+    const weekNumber = Math.ceil((weekStart - new Date(year, 0, 1)) / (7 * 24 * 60 * 60 * 1000));
+    return `${year}-W${weekNumber.toString().padStart(2, '0')}`;
+  };
+
+  // Calculate weekly miles for teams using pre-computed stats
+  const calculateTeamWeeklyMiles = async (teams) => {
+    const currentWeekId = getCurrentWeekId();
+    
+    try {
+      // Get all weekly team stats for current week
+      const weeklyTeamStatsQuery = query(
+        collection(db, 'weeklyTeamStats'),
+        where('weekId', '==', currentWeekId),
+        limit(100)
+      );
+      
+      const weeklyStatsSnapshot = await getDocs(weeklyTeamStatsQuery);
+      
+      // Create a map of team weekly stats
+      const teamWeeklyStats = {};
+      weeklyStatsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        teamWeeklyStats[data.teamId] = data.weeklyMiles || 0;
+      });
+      
+      // Apply weekly miles to teams
+      return teams.map(team => ({
+        ...team,
+        weeklyMiles: teamWeeklyStats[team.id] || 0
+      }));
+      
+    } catch (error) {
+      if (DEV) {
+        console.error('Error fetching team weekly stats:', error);
+      }
+      // Fall back to zero weekly miles if there's an error
+      return teams.map(team => ({
+        ...team,
+        weeklyMiles: 0
+      }));
+    }
+  };
+
+  // Calculate weekly miles for individuals using pre-computed stats
+  const calculateIndividualWeeklyMiles = async (users) => {
+    const currentWeekId = getCurrentWeekId();
+    
+    try {
+      // Get all weekly user stats for current week
+      const weeklyUserStatsQuery = query(
+        collection(db, 'weeklyStats'),
+        where('weekId', '==', currentWeekId),
+        limit(200)
+      );
+      
+      const weeklyStatsSnapshot = await getDocs(weeklyUserStatsQuery);
+      
+      // Create a map of user weekly stats
+      const userWeeklyStats = {};
+      weeklyStatsSnapshot.forEach((doc) => {
+        const data = doc.data();
+        userWeeklyStats[data.userId] = data.weeklyMiles || 0;
+      });
+      
+      // Apply weekly miles to users
+      return users.map(user => ({
+        ...user,
+        weeklyMiles: userWeeklyStats[user.id] || 0
+      }));
+      
+    } catch (error) {
+      if (DEV) {
+        console.error('Error fetching individual weekly stats:', error);
+      }
+      // Fall back to zero weekly miles if there's an error
+      return users.map(user => ({
+        ...user,
+        weeklyMiles: 0
+      }));
+    }
+  };
+
   const fetchLeaderboardData = async () => {
     setLoading(true);
     setError('');
@@ -25,11 +136,9 @@ function Leaderboard() {
       // Fetch teams data
       let teamsQuery;
       if (sortBy === 'weeklyMiles') {
-        // For weekly miles, we need to calculate from mileLogs
-        // For now, use totalMiles as placeholder
+        // For weekly miles, get all teams first, then calculate weekly miles
         teamsQuery = query(
           collection(db, 'teams'),
-          orderBy('totalMiles', 'desc'),
           limit(50)
         );
       } else {
@@ -53,25 +162,27 @@ function Leaderboard() {
           });
         }
       });
-      setTeams(teamsData);
+
+      // Calculate weekly miles for teams if needed
+      let finalTeamsData = teamsData;
+      if (sortBy === 'weeklyMiles') {
+        finalTeamsData = await calculateTeamWeeklyMiles(teamsData);
+        // Sort by weekly miles
+        finalTeamsData.sort((a, b) => b.weeklyMiles - a.weeklyMiles);
+      }
+
+      setTeams(finalTeamsData);
 
       // Fetch individuals data
       let usersQuery;
       if (sortBy === 'weeklyMiles') {
-        // For weekly miles, we'll use totalMiles for now
+        // For weekly miles, get all users first
         usersQuery = query(
           collection(db, 'users'),
-          orderBy('totalMiles', 'desc'),
-          limit(50)
-        );
-      } else if (sortBy === 'totalRides') {
-        // Users don't have totalRides field, so we'll use totalMiles
-        usersQuery = query(
-          collection(db, 'users'),
-          orderBy('totalMiles', 'desc'),
           limit(50)
         );
       } else {
+        // For total miles and total rides, we can sort directly
         usersQuery = query(
           collection(db, 'users'),
           orderBy(sortBy, 'desc'),
@@ -88,12 +199,21 @@ function Leaderboard() {
           ...data
         });
       });
-      setIndividuals(usersData);
+
+      // Calculate weekly miles for individuals if needed
+      let finalUsersData = usersData;
+      if (sortBy === 'weeklyMiles') {
+        finalUsersData = await calculateIndividualWeeklyMiles(usersData);
+        // Sort by weekly miles
+        finalUsersData.sort((a, b) => b.weeklyMiles - a.weeklyMiles);
+      }
+
+      setIndividuals(finalUsersData);
 
       if (DEV) {
         console.log('Leaderboard data fetched:', {
-          teams: teamsData.length,
-          individuals: usersData.length,
+          teams: finalTeamsData.length,
+          individuals: finalUsersData.length,
           sortBy
         });
       }
@@ -122,7 +242,7 @@ function Leaderboard() {
       case 'totalRides':
         return item.totalRides || 0;
       case 'weeklyMiles':
-        return item.weeklyMiles || item.totalMiles || 0; // Fallback to totalMiles
+        return item.weeklyMiles || 0;
       default:
         return 0;
     }
@@ -135,7 +255,7 @@ function Leaderboard() {
       case 'totalRides':
         return 'Total Rides';
       case 'weeklyMiles':
-        return 'Weekly Miles';
+        return 'This Week';
       default:
         return '';
     }
@@ -151,7 +271,7 @@ function Leaderboard() {
         color: '#ffc020',
         fontSize: '18px'
       }}>
-        Loading leaderboard...
+        Loading leaderboard{sortBy === 'weeklyMiles' ? ' and calculating weekly miles...' : '...'}
       </div>
     );
   }
@@ -269,7 +389,7 @@ function Leaderboard() {
             }}
           >
             <Calendar size={16} />
-            Weekly Miles
+            This Week
           </button>
         </div>
       </div>
@@ -407,7 +527,10 @@ function Leaderboard() {
                   textAlign: 'center',
                   fontSize: '16px'
                 }}>
-                  {team.averageMilesPerMember}
+                  {sortBy === 'weeklyMiles' 
+                    ? (team.memberCount > 0 ? (team.weeklyMiles / team.memberCount).toFixed(1) : '0.0')
+                    : team.averageMilesPerMember
+                  }
                 </div>
               </div>
             ))}
@@ -510,7 +633,7 @@ function Leaderboard() {
         )}
       </div>
 
-      {/* Note about weekly miles */}
+      {/* Weekly miles info */}
       {sortBy === 'weeklyMiles' && (
         <div style={{
           marginTop: '16px',
@@ -521,7 +644,7 @@ function Leaderboard() {
           fontSize: '14px',
           textAlign: 'center'
         }}>
-          Note: Weekly miles calculation is coming soon. Currently showing total miles.
+          📅 Showing miles logged from Monday to Sunday this week
         </div>
       )}
     </div>
