@@ -3,6 +3,7 @@ import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../../firebase';
 import { useNavigate } from 'react-router-dom';
 import { Bike, Mail, Lock, AlertCircle } from 'lucide-react';
+import RideOnLogo from '../RideOnLogo';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -51,28 +52,24 @@ const Login = () => {
         border: '1px solid #005479'
       }}>
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'center', 
-            marginBottom: '16px' 
-          }}>
-            <Bike style={{ 
-              height: '48px', 
-              width: '48px', 
-              color: '#ffc020' 
-            }} />
-          </div>
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'center', 
+          marginBottom: '16px' 
+        }}>
+          <RideOnLogo size={64} style={{ maxWidth: '200px' }} />
+        </div>
           <h1 style={{ 
             fontSize: '28px', 
             fontWeight: 'bold', 
             color: '#ffc020',
             margin: '0 0 8px 0'
-          }}>RideOn</h1>
+          }}></h1>
           <p style={{ 
             color: '#b4bdc2', 
             margin: 0, 
             fontSize: '16px' 
-          }}>RideOn - Track miles, build teams, ride together</p>
+          }}>Track miles, build teams, ride together</p>
         </div>
 
         <form onSubmit={handleSubmit} style={{ marginBottom: '24px' }}>

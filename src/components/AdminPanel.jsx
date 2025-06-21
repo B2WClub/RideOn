@@ -12,7 +12,11 @@ import {
   updateDoc,
   arrayRemove,
   increment,
-  orderBy 
+  orderBy,
+  writeBatch,
+  serverTimestamp,
+  limit,
+  Timestamp
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
@@ -35,6 +39,8 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import TeamsList from './TeamsList';
+
+const DEV = import.meta.env.MODE === 'development';
 
 function AdminPanel() {
   const { currentUser } = useAuth();
@@ -68,6 +74,12 @@ function AdminPanel() {
     checkAdminAccess();
   }, [currentUser]);
 
+   useEffect(() => {
+    if (userProfile?.role === 'admin') {
+      loadAdminData();
+    }
+  }, [userProfile]);
+
   const checkAdminAccess = async () => {
     try {
       setLoading(true);
@@ -78,31 +90,32 @@ function AdminPanel() {
         setError('User profile not found');
         return;
       }
-      
       const userData = userDoc.data();
-      setUserProfile(userData);
-
-      // Check if user is app admin
-      if (userData.role !== 'admin') {
-        setError('Access denied. App admin privileges required.');
-        return;
+      if (!userData || !userData.role) {
+        setError('Invalid user data: missing role');
+        return
       }
-
-      // Load admin data
-      await loadAdminData();
-
+      setUserProfile(userData);
     } catch (error) {
-      console.error('Error checking admin access:', error);
+      if (DEV) console.error('Error checking admin access:', error);
       setError('Failed to load admin panel');
     }
-    
     setLoading(false);
   };
+  useEffect(() => {
+    if (userProfile?.role === 'admin') {
+      loadAdminData();
+    }
+  }, [userProfile]);
 
   const loadAdminData = async () => {
+    if (!userProfile || typeof userProfile.role !== 'string') {
+      if (DEV) console.error('[loadAdminData] userProfile is missing or invalid:', userProfile);
+      return;
+    }
     try {
       // Load all teams
-      const teamsQuery = query(collection(db, 'teams'));
+      const teamsQuery = query(collection(db, 'teams'), limit(100));
       const teamsSnapshot = await getDocs(teamsQuery);
       const teams = [];
       teamsSnapshot.forEach((doc) => {
@@ -111,32 +124,53 @@ function AdminPanel() {
       setAllTeams(teams);
 
       // Load all users
-      const usersQuery = query(collection(db, 'users'));
+      const usersQuery = query(collection(db, 'users'), limit(100));
       const usersSnapshot = await getDocs(usersQuery);
       const users = [];
       usersSnapshot.forEach((doc) => {
-        users.push({ id: doc.id, ...doc.data() });
+        const data = doc.data();
+        if(data && data.role) {
+          users.push({ id: doc.id, ...doc.data() });
+        } else {
+          if (DEV) console.warn(`[WARN] Skipped user doc with ID ${doc.id} due to null data.`);
+        }
+        
       });
       setAllUsers(users);
 
       // Load pending admin invitations (both team_admin and admin)
-      const adminInvitesQuery = query(
-        collection(db, 'invitations'),
-        where('role', 'in', ['team_admin', 'admin']),
-        where('used', '==', false)
-      );
-      const adminInvitesSnapshot = await getDocs(adminInvitesQuery);
-      const adminInvites = [];
-      adminInvitesSnapshot.forEach((doc) => {
-        const data = doc.data();
-        // Check if invitation hasn't expired
-        const expiresAt = data.expiresAt.toDate ? data.expiresAt.toDate() : new Date(data.expiresAt);
-        const now = new Date();
-        if (now < expiresAt) {
-          adminInvites.push({ id: doc.id, ...data });
-        }
-      });
-      setPendingAdminInvites(adminInvites);
+      if(DEV) {
+        console.log('LOAD PENDING ADMIN DATA');
+        console.log('[DEBUG] currentUser.uid:', currentUser.uid);
+        console.log('[DEBUG] userProfile.role:', userProfile.role);
+        console.log('[DEBUG] Attempting query on /invitations');
+      }
+
+      try {
+        const adminInvitesQuery = query(
+          collection(db, 'invitations'),
+          where('role', 'in', ['team_admin', 'admin']),
+          where('used', '==', false),
+          limit(100)
+        );
+
+        const adminInvitesSnapshot = await getDocs(adminInvitesQuery);
+        const adminInvites = [];
+        adminInvitesSnapshot.forEach((doc) => {
+          const data = doc.data();
+          // Check if invitation hasn't expired
+          const expiresAt = data.expiresAt.toDate ? data.expiresAt.toDate() : new Date(data.expiresAt);
+          const now = new Date();
+          if (now < expiresAt) {
+            adminInvites.push({ id: doc.id, ...data });
+          }
+        });
+        setPendingAdminInvites(adminInvites);
+      } catch (inviteError) {
+        if(DEV) console.error('Error loading invitations: ', inviteError);
+
+        setPendingAdminInvites([]);
+      }
 
       // Calculate app statistics
       const totalUsers = users.length;
@@ -152,7 +186,7 @@ function AdminPanel() {
       });
 
     } catch (error) {
-      console.error('Error loading admin data:', error);
+      if (DEV) console.error('Error loading admin data:', error);
       setError('Failed to load admin data');
     }
   };
@@ -164,6 +198,9 @@ function AdminPanel() {
     setSuccess('');
 
     try {
+      // Normalize email to lowercase for document IDs
+      const normalizedEmail = inviteEmail.toLowerCase();
+
       // Check if email is already invited
       const existingInvite = await getDoc(doc(db, 'invitations', inviteEmail));
       if (existingInvite.exists()) {
@@ -184,23 +221,52 @@ function AdminPanel() {
         return;
       }
 
+      //App admins inviting to a specific team
+      let targetTeamId = null;
+      let targetTeamName = null;
+
+      const expiresAt = Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
       // Create invitation
       const invitationData = {
         email: inviteEmail,
         role: inviteRole,
-        teamId: inviteRole === 'admin' ? null : null, // Admin doesn't need a team, team_admin will create one
-        teamName: null,
+        teamId: targetTeamId, // Admin doesn't need a team, team_admin will create one
+        teamName: targetTeamName,
         invitedBy: currentUser.uid,
         inviterUserName: userProfile.userName,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-        used: false,
+        createdAt: serverTimestamp(),
+        expiresAt: expiresAt,
         usedAt: null,
+        used: false,
         isTeamAdminInvite: inviteRole === 'team_admin',
         isAppAdminInvite: inviteRole === 'admin'
       };
+      
+      //Create the public view document
+      const publicViewData = {
+        email: inviteEmail,
+        expiresAt: expiresAt,
+        used: false
+      }
 
-      await setDoc(doc(db, 'invitations', inviteEmail), invitationData);
+      try {
+        // Try creating invitation first
+        if (import.meta.env.DEV) console.log('Attempting to create invitation document...');
+        await setDoc(doc(db, 'invitations', normalizedEmail), invitationData);
+        if (import.meta.env.DEV) console.log('Invitation created successfully!');
+        
+        // Then try public view
+        if (import.meta.env.DEV) console.log('Attempting to create public view document...');
+        await setDoc(doc(db, 'invitationsPublicView', normalizedEmail), publicViewData);
+        if (import.meta.env.DEV) console.log('Public view created successfully!');
+      } catch (error) {
+        if (import.meta.env.DEV) console.error('Failed at:', error);
+        // If first one succeeds but second fails, clean up
+        if (error.message.includes('invitationsPublicView')) {
+          await deleteDoc(doc(db, 'invitations', normalizedEmail));
+        }
+        throw error;
+      }
 
       // Create invitation link
       const linkParam = inviteRole === 'admin' ? 'appadmin=true' : 'admin=true';
@@ -234,7 +300,11 @@ function AdminPanel() {
 
   const handleCancelAdminInvitation = async (email) => {
     try {
-      await deleteDoc(doc(db, 'invitations', email));
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'invitations', normalizedEmail));
+      batch.delete(doc(db, 'invitationsPublicView', normalizedEmail));
+      await batch.commit();
+      
       setSuccess('Admin invitation cancelled');
       setTimeout(() => setSuccess(''), 3000);
       loadAdminData();
