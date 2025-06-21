@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc, getDoc, updateDoc, deleteDoc, collection, query, where, getDocs, addDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
@@ -25,6 +24,7 @@ const Register = () => {
   const [loading, setLoading] = useState(false);
   const [checkingUserName, setCheckingUserName] = useState(false);
   const [userNameAvailable, setUserNameAvailable] = useState(null);
+  const [userNameValidationError, setUserNameValidationError] = useState('');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -33,16 +33,54 @@ const Register = () => {
       checkEmailInvitation(formData.email.trim());
     }
   }, []);
+
+  // Username validation function
+  const validateUsername = (userName) => {
+    if (!userName) {
+      return '';
+    }
+
+    if (userName.length < 3) {
+      return 'Username must be at least 3 characters long';
+    }
+
+    if (userName.length > 20) {
+      return 'Username must be 20 characters or less';
+    }
+
+    // Check for spaces
+    if (userName.includes(' ')) {
+      return 'Username cannot contain spaces';
+    }
+
+    // Check for valid characters only (letters, numbers, underscores, hyphens)
+    const validUsernameRegex = /^[a-zA-Z0-9_-]+$/;
+    if (!validUsernameRegex.test(userName)) {
+      return 'Username can only contain letters, numbers, underscores, and hyphens';
+    }
+
+    // Check if starts or ends with special characters
+    if (userName.startsWith('_') || userName.startsWith('-') || 
+        userName.endsWith('_') || userName.endsWith('-')) {
+      return 'Username cannot start or end with underscores or hyphens';
+    }
+
+    return '';
+  };
   
   const handleChange = (e) => {
+    const { name, value } = e.target;
+    
     setFormData(prev => ({
       ...prev,
-      [e.target.name]: e.target.value
+      [name]: value
     }));
 
-    // Reset userName availability when user types
-    if (e.target.name === 'userName') {
+    // Real-time username validation
+    if (name === 'userName') {
       setUserNameAvailable(null);
+      const validationError = validateUsername(value);
+      setUserNameValidationError(validationError);
     }
   };
 
@@ -52,6 +90,15 @@ const Register = () => {
       setUserNameAvailable(null);
       return;
     }
+
+    // First check if username is valid
+    const validationError = validateUsername(userName);
+    if (validationError) {
+      setUserNameValidationError(validationError);
+      setUserNameAvailable(null);
+      return;
+    }
+
     setCheckingUserName(true);
     try {
       if (import.meta.env.DEV) {
@@ -143,7 +190,11 @@ const Register = () => {
     if (!formData.email.trim()) return setError('Email is required') || false;
     if (!validatedInvitation) return setError('Please enter a valid invited email address') || false;
     if (!formData.userName.trim()) return setError('Username is required') || false;
-    if (formData.userName.length < 3) return setError('Username too short') || false;
+    
+    // Check username validation
+    const usernameValidationError = validateUsername(formData.userName.trim());
+    if (usernameValidationError) return setError(usernameValidationError) || false;
+    
     if (userNameAvailable === false) return setError('Username taken') || false;
     if (!formData.password) return setError('Password required') || false;
     if (formData.password !== formData.confirmPassword) return setError('Passwords do not match') || false;
@@ -442,8 +493,10 @@ const Register = () => {
 
   const getUserNameInputStyle = () => {
     let borderColor = '#005479';
-    if (checkingUserName) {
-      borderColor = '#f5a302';
+    if (userNameValidationError) {
+      borderColor = '#ef4444'; // Red for validation error
+    } else if (checkingUserName) {
+      borderColor = '#f5a302'; // Orange for checking
     } else if (userNameAvailable === true) {
       borderColor = '#22c55e'; // Green for available
     } else if (userNameAvailable === false) {
@@ -706,7 +759,7 @@ const Register = () => {
                 required
                 style={getUserNameInputStyle()}
                 onFocus={(e) => {
-                  if (!checkingUserName && userNameAvailable !== false) {
+                  if (!checkingUserName && userNameAvailable !== false && !userNameValidationError) {
                     e.target.style.borderColor = '#f5a302';
                     e.target.style.boxShadow = '0 0 0 3px rgba(245, 163, 2, 0.1)';
                   }
@@ -723,7 +776,7 @@ const Register = () => {
                   Checking...
                 </div>
               )}
-              {userNameAvailable === true && (
+              {!userNameValidationError && userNameAvailable === true && (
                 <div style={{
                   position: 'absolute',
                   right: '12px',
@@ -735,7 +788,7 @@ const Register = () => {
                   ✓ Available
                 </div>
               )}
-              {userNameAvailable === false && (
+              {(userNameValidationError || userNameAvailable === false) && (
                 <div style={{
                   position: 'absolute',
                   right: '12px',
@@ -744,17 +797,27 @@ const Register = () => {
                   color: '#ef4444',
                   fontWeight: '600'
                 }}>
-                  ✗ Taken
+                  ✗ {userNameValidationError ? 'Invalid' : 'Taken'}
                 </div>
               )}
             </div>
+            {userNameValidationError && (
+              <p style={{ 
+                fontSize: '12px', 
+                color: '#ef4444', 
+                margin: '4px 0 0 0',
+                fontWeight: '500'
+              }}>
+                {userNameValidationError}
+              </p>
+            )}
             <p style={{ 
               fontSize: '12px', 
               color: '#b4bdc2', 
               margin: '4px 0 0 0',
               opacity: 0.8
             }}>
-              This will be shown on leaderboards and team lists
+              3-20 characters, letters/numbers/underscores/hyphens only, no spaces
             </p>
           </div>
 
@@ -838,33 +901,33 @@ const Register = () => {
 
           <button
             type="submit"
-            disabled={loading || checkingUserName || userNameAvailable === false}
+            disabled={loading || checkingUserName || userNameAvailable === false || userNameValidationError}
             style={{
               width: '100%',
-              background: (loading || checkingUserName || userNameAvailable === false)
+              background: (loading || checkingUserName || userNameAvailable === false || userNameValidationError)
                 ? '#005479' 
                 : 'linear-gradient(135deg, #f5a302, #ffc020)',
-              color: (loading || checkingUserName || userNameAvailable === false) ? '#b4bdc2' : '#0c1e34',
+              color: (loading || checkingUserName || userNameAvailable === false || userNameValidationError) ? '#b4bdc2' : '#0c1e34',
               padding: '16px',
               border: 'none',
               borderRadius: '12px',
               fontSize: '16px',
               fontWeight: '700',
-              cursor: (loading || checkingUserName || userNameAvailable === false) ? 'not-allowed' : 'pointer',
+              cursor: (loading || checkingUserName || userNameAvailable === false || userNameValidationError) ? 'not-allowed' : 'pointer',
               transition: 'all 0.3s ease',
-              boxShadow: (loading || checkingUserName || userNameAvailable === false)
+              boxShadow: (loading || checkingUserName || userNameAvailable === false || userNameValidationError)
                 ? 'none' 
                 : '0 4px 12px rgba(245, 163, 2, 0.3)',
               outline: 'none'
             }}
             onMouseEnter={(e) => {
-              if (!loading && !checkingUserName && userNameAvailable !== false) {
+              if (!loading && !checkingUserName && userNameAvailable !== false && !userNameValidationError) {
                 e.target.style.transform = 'translateY(-2px)';
                 e.target.style.boxShadow = '0 6px 20px rgba(245, 163, 2, 0.4)';
               }
             }}
             onMouseLeave={(e) => {
-              if (!loading && !checkingUserName && userNameAvailable !== false) {
+              if (!loading && !checkingUserName && userNameAvailable !== false && !userNameValidationError) {
                 e.target.style.transform = 'translateY(0)';
                 e.target.style.boxShadow = '0 4px 12px rgba(245, 163, 2, 0.3)';
               }
